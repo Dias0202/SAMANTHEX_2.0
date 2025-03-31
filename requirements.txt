@@ -1,0 +1,4 @@
+tkinter
+biopython
+os
+socket
