@@ -1,6 +1,6 @@
-# SAMANTHEX_2.0
+# SAMANTHEX
 
-Samanthex 2.0 is a graphical tool designed to assemble consensus sequences from Sanger sequencing data. It provides an intuitive interface for loading, aligning, and generating consensus sequences from forward and reverse reads. Additionally, Samanthex allows users to run BLAST queries on the generated consensus sequences against the NCBI database.
+Samanthex is a graphical tool designed to assemble consensus sequences from Sanger sequencing data. It provides an intuitive interface for loading, aligning, and generating consensus sequences from forward and reverse reads. Additionally, Samanthex allows users to run BLAST queries on the generated consensus sequences against the NCBI database.
 
 ## Features
 - Load and align forward and reverse Sanger sequencing reads.
