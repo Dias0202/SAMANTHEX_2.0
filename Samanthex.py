@@ -1,20 +1,23 @@
 import tkinter as tk
 from tkinter import filedialog, OptionMenu, StringVar, messagebox
-from Bio import SeqIO
+from Bio import SeqIO, pairwise2
 from Bio.Seq import Seq
 from Bio.Blast import NCBIWWW
 from Bio.Blast import NCBIXML
 import os
 import socket
+import sys
 
-cor1 = "#302f2f"  # grey
+# --- Configurações Iniciais ---
+cor1 = "#302f2f"
 cor2 = "#787775"
 arquivos_forward = []
 arquivos_reverse = []
 ultima_sequencia_consenso = ""
+socket.setdefaulttimeout(120)
 
-socket.setdefaulttimeout(120)  # 120 seconds
 
+# --- Utility Functions ---
 def resource_path(relative_path):
     try:
         base_path = sys._MEIPASS
@@ -23,289 +26,247 @@ def resource_path(relative_path):
     return os.path.join(base_path, relative_path)
 
 
-# Function to select forward sequence files
+def reverter_complementar(sequencia):
+    return str(Seq(sequencia).reverse_complement())
+
+
+# --- Graphical Interface Functions ---
 def selecionar_arquivos_forward():
     global arquivos_forward
     arquivos_forward = filedialog.askopenfilenames(
-        title="Select the Forward sequences",
-        filetypes=(("ABI and PHD Files", "*.ab1 *.phd.1"), ("All Files", "*.*"))
+        title= "Select Forward sequences",
+        filetypes=(("Files ABI e PHD", "*.ab1 *.phd.1"), ("All files", "*.*"))
     )
-    arquivos_label_fwd.config(text=f"{len(arquivos_forward)} forward file(s) selected")
-    return arquivos_forward
+    arquivos_label_fwd.config(text=f"{len(arquivos_forward)} selected forward file(s)")
 
-# Function to select reverse sequence files
+
 def selecionar_arquivos_reverse():
     global arquivos_reverse
     arquivos_reverse = filedialog.askopenfilenames(
-        title="Select the Reverse sequences",
-        filetypes=(("ABI and PHD Files", "*.ab1 *.phd.1"), ("All Files", "*.*"))
+        title="Select Reverse sequences",
+        filetypes=(("Arquivos ABI e PHD", "*.ab1 *.phd.1"), ("All files", "*.*"))
     )
-    arquivos_label_rev.config(text=f"{len(arquivos_reverse)} reverse file(s) selected")
-    return arquivos_reverse
+    arquivos_label_rev.config(text=f"{len(arquivos_reverse)} selected reverse file(s)")
 
-# Function to read .ab1 file and extract sequence and quality
+
+# --- Funções de Leitura de Arquivos ---
 def ler_arquivo_ab1(arquivo):
     record = SeqIO.read(arquivo, "abi")
     return record.seq, record.letter_annotations["phred_quality"]
 
-# Function to read .phd.1 file and extract sequence and quality
+
 def ler_arquivo_phd(arquivo):
-    seq = []
-    qual = []
-    in_sequence = False
-    in_quality = False
+    seq_parts, qual_parts = [], []
+    in_dna_section = False
     try:
         with open(arquivo, "r") as file:
             for line in file:
                 line = line.strip()
-
-                if line.startswith("BEGIN_SEQUENCE"):
-                    in_sequence = True
-                    continue
-                elif line.startswith("END_SEQUENCE"):
-                    in_sequence = False
-                    continue
-
-                if line.startswith("BEGIN_QUALITY"):
-                    in_quality = True
-                    continue
-                elif line.startswith("END_QUALITY"):
-                    in_quality = False
-                    continue
-
-                if in_sequence and line:
-                    seq.append(line)
-
-                if in_quality and line:
-                    try:
-                        qual.append(int(line))  # Convert quality to integer
-                    except ValueError:
-                        print(f"Invalid quality in file {arquivo}: {line}")
-                        qual.append(0)  # Insert 0 for invalid values
-
-        if not seq or not qual:
-            print(f"Error reading sequence or quality in file: {arquivo}")
-            return Seq(""), []
-
-        return Seq("".join(seq)), qual
-
+                if line.startswith("BEGIN_DNA"):
+                    in_dna_section = True; continue
+                elif line.startswith("END_DNA"):
+                    in_dna_section = False; continue
+                if in_dna_section and line:
+                    parts = line.split()
+                    if len(parts) >= 2:
+                        seq_parts.append(parts[0]);
+                        qual_parts.append(int(parts[1]))
+        if not seq_parts: return Seq(""), []
+        return Seq("".join(seq_parts)), qual_parts
     except Exception as e:
-        print(f"Error processing file {arquivo}: {e}")
+        print(f"Error processing PHD file {arquivo}: {e}")
         return Seq(""), []
 
-# Function to reverse complement the sequence (for reverse reads)
-def reverter_complementar(sequencia):
-    return str(Seq(sequencia).reverse_complement())
 
-# Find the overlap between two sequences
-def encontrar_sobreposicao(seq1, seq2):
-    """ Find the largest overlap between the end of seq1 and the start of seq2 """
-    max_overlap = min(len(seq1), len(seq2))
-    for i in range(max_overlap, 0, -1):
-        if seq1[-i:] == seq2[:i]:
-            return i
-    return 0
+# --- CONSENSUS LOGIC ---
 
-# Assemble consensus sequence with overlap between forward and reverse
-def montar_consenso_com_sobreposicao(seq_fwd, qual_fwd, seq_rev, qual_rev, phred_min):
-    sobreposicao = encontrar_sobreposicao(seq_fwd, seq_rev)
-    consenso = list(seq_fwd[:-sobreposicao]) if sobreposicao > 0 else list(seq_fwd)
+def fundir_dois_alinhamentos(seq1, qual1, seq2, qual2, phred_min):
 
-    # Process overlapping region
-    for i in range(sobreposicao):
-        fwd_base = seq_fwd[-sobreposicao + i]
-        rev_base = seq_rev[i]
-        fwd_qual = qual_fwd[-sobreposicao + i]
-        rev_qual = qual_rev[i]
+    alignments = pairwise2.align.localms(str(seq1), str(seq2), 2, -1, -5, -2)
+    if not alignments: return seq1 + seq2, qual1 + qual2
 
-        if fwd_qual >= phred_min and rev_qual >= phred_min:
-            consenso.append(fwd_base if fwd_qual >= rev_qual else rev_base)
-        elif fwd_qual >= phred_min:
-            consenso.append(fwd_base)
-        elif rev_qual >= phred_min:
-            consenso.append(rev_base)
+    alinh1, alinh2, score, begin, end = alignments[0]
+
+    consenso_seq, consenso_qual = [], []
+    idx1, idx2 = 0, 0
+
+    for base1, base2 in zip(alinh1, alinh2):
+        qual_val1 = qual1[idx1] if base1 != '-' and idx1 < len(qual1) else 0
+        qual_val2 = qual2[idx2] if base2 != '-' and idx2 < len(qual2) else 0
+
+        if base1 == base2:
+            chosen_base = base1
+            chosen_qual = max(qual_val1, qual_val2)
+        elif base1 == '-':
+            chosen_base = base2
+            chosen_qual = qual_val2
+        elif base2 == '-':
+            chosen_base = base1
+            chosen_qual = qual_val1
+        else:  # Mismatch
+            if qual_val1 >= qual_val2:
+                chosen_base = base1
+                chosen_qual = qual_val1
+            else:
+                chosen_base = base2
+                chosen_qual = qual_val2
+
+        if chosen_qual < phred_min:
+            consenso_seq.append('N')
         else:
-            consenso.append('N')  # Low-quality base
+            consenso_seq.append(chosen_base)
+        consenso_qual.append(chosen_qual)
 
-    # remaining part of the reverse sequence
-    consenso += list(seq_rev[sobreposicao:])
+        if base1 != '-': idx1 += 1
+        if base2 != '-': idx2 += 1
 
-    return "".join(consenso)
+    return Seq("".join(consenso_seq)), consenso_qual
 
-# Align and assemble consensus sequence
-def alinhar_sequencias(sequencias_fwd, qualidades_fwd, sequencias_rev, qualidades_rev, phred_min):
-    return montar_consenso_com_sobreposicao(sequencias_fwd, qualidades_fwd, sequencias_rev, qualidades_rev, phred_min)
 
-# Display "Starting BLAST query" in the GUI
-def exibir_mensagem_blast():
-    resultado_text.delete(1.0, tk.END)
-    resultado_text.insert(tk.END, "Starting a BLAST query...\n")
-    root.update_idletasks()
+def criar_consenso_de_replicatas(lista_sequencias, lista_qualidades, phred_min):
 
-# Run BLAST on the most recent consensus sequence
-def executar_blast():
-    global ultima_sequencia_consenso
-    if not ultima_sequencia_consenso:
-        messagebox.showerror("Error", "No consensus sequence available for BLAST")
-        return
+    if not lista_sequencias: return None, None
 
-    exibir_mensagem_blast()
-    try:
-        result_handle = NCBIWWW.qblast("blastn", "nt", ultima_sequencia_consenso)
-        blast_records = NCBIXML.read(result_handle)
+    consenso_seq = lista_sequencias[0]
+    consenso_qual = lista_qualidades[0]
 
-        hits = []
-        for alignment in blast_records.alignments:
-            for hsp in alignment.hsps:
-                hit_info = (
-                    f"Sequence: {alignment.title}\n"
-                    f"Score: {hsp.score}\n"
-                    f"Identities: {hsp.identities}/{hsp.align_length}\n"
-                    f"E-value: {hsp.expect}\n\n"
-                )
-                hits.append(hit_info)
+    for i in range(1, len(lista_sequencias)):
+        print(f"    ...merging with replicate {i + 1}")
+        consenso_seq, consenso_qual = fundir_dois_alinhamentos(
+            consenso_seq, consenso_qual,
+            lista_sequencias[i], lista_qualidades[i],
+            phred_min
+        )
+    return consenso_seq, consenso_qual
 
-        if hits:
-            resultado_text.delete(1.0, tk.END)
-            resultado_text.insert(tk.END, "\n".join(hits))
-        else:
-            resultado_text.delete(1.0, tk.END)
-            resultado_text.insert(tk.END, "No similar sequences found")
 
-    except Exception as e:
-        print(f"Error performing BLAST query: {e}")
-        resultado_text.delete(1.0, tk.END)
-        resultado_text.insert(tk.END, f"Error performing BLAST query: {e}")
-
+# --- Main Processing Function ---
 def iniciar_processamento():
+
     global ultima_sequencia_consenso
     if not arquivos_forward or not arquivos_reverse:
-        messagebox.showerror("Error", "Select at least one forward and one reverse sequence")
+        messagebox.showerror("Erro", "Select the Forward and Reverse replicate files.")
         return
 
-    nome_final = nome_sequencia.get()
-    phred_value = int(phred_minimo.get())  # Minimum Phred score
+    phred_value = int(phred_minimo.get())
+    nome_base = nome_sequencia.get() or "final_sequence"
 
     sequencias_fwd = []
     qualidades_fwd = []
+    for f in arquivos_forward:
+        seq, qual = (ler_arquivo_ab1 if f.endswith('.ab1') else ler_arquivo_phd)(f)
+        if seq: sequencias_fwd.append(seq); qualidades_fwd.append(qual)
+
     sequencias_rev = []
     qualidades_rev = []
-
-    # Load forward files
-    for arquivo in arquivos_forward:
-        ext = os.path.splitext(arquivo)[1]
-        if ext == '.ab1':
-            seq, qual = ler_arquivo_ab1(arquivo)
-        elif ext == '.phd.1':
-            seq, qual = ler_arquivo_phd(arquivo)
-        else:
-            print(f"Unsupported file: {arquivo}")
-            continue
-        sequencias_fwd.append(seq)
-        qualidades_fwd.append(qual)
-
-    # Load reverse files
-    for arquivo in arquivos_reverse:
-        ext = os.path.splitext(arquivo)[1]
-        if ext == '.ab1':
-            seq, qual = ler_arquivo_ab1(arquivo)
-        elif ext == '.phd.1':
-            seq, qual = ler_arquivo_phd(arquivo)
-        else:
-            print(f"Unsupported file: {arquivo}")
-            continue
-        sequencias_rev.append(reverter_complementar(seq))
-        qualidades_rev.append(qual[::-1])
+    for f in arquivos_reverse:
+        seq_orig, qual_orig = (ler_arquivo_ab1 if f.endswith('.ab1') else ler_arquivo_phd)(f)
+        if seq_orig:
+            sequencias_rev.append(reverter_complementar(seq_orig))
+            qualidades_rev.append(qual_orig[::-1])
 
     if not sequencias_fwd or not sequencias_rev:
-        print("Error: At least one forward and reverse sequence required")
+        messagebox.showerror("Erro", "The sequences could not be loaded. Check the files..")
         return
 
-    # Generate consensus sequence
-    consenso = alinhar_sequencias(sequencias_fwd[0], qualidades_fwd[0],
-                                  sequencias_rev[0], qualidades_rev[0], phred_value)
+    consenso_fwd, qual_fwd = criar_consenso_de_replicatas(sequencias_fwd, qualidades_fwd, phred_value)
+    consenso_rev, qual_rev = criar_consenso_de_replicatas(sequencias_rev, qualidades_rev, phred_value)
+    consenso_final, _ = fundir_dois_alinhamentos(consenso_fwd, qual_fwd, consenso_rev, qual_rev, phred_value)
+    print("Final consensus generated!")
 
-    ultima_sequencia_consenso = consenso
+    ultima_sequencia_consenso = str(consenso_final)
+    resultado_final = f">{nome_base}_consensus\n{ultima_sequencia_consenso}"
 
+    # Atualizar GUI e salvar arquivo
+    resultado_text.delete(1.0, tk.END)
+    resultado_text.insert(tk.END, resultado_final)
     blast_btn.config(state=tk.NORMAL)
 
-    print(f"Consensus Sequence ({nome_final}): {consenso}")
+    with open(f"{nome_base}_consensus.fasta", "w") as f:
+        f.write(resultado_final)
 
-    # Save the consensus sequence to a file (optional)
-    with open(f"{nome_final}_consensus.fasta", "w") as f:
-        f.write(f">{nome_final}_consensus\n")
-        f.write(consenso)
+    messagebox.showinfo("Success", f"Processing complete!\nFinal sequence saved in '{nome_base}_consensus.fasta'")
 
-    print("Processing completed")
 
-# GUI setup
-cor1 = "#302f2f"
-cor2 = "#787775"
+# ---BLAST ---
+def executar_blast():
+    if not ultima_sequencia_consenso:
+        messagebox.showerror("Erro", "No consensus sequence available for BLAST")
+        return
+
+    resultado_text.delete(1.0, tk.END)
+    resultado_text.insert(tk.END, "Starting the BLAST search.\n")
+    root.update_idletasks()
+
+    try:
+        result_handle = NCBIWWW.qblast("blastn", "nt", ultima_sequencia_consenso)
+        blast_records = NCBIXML.read(result_handle)
+        hits = [f"> {aln.title}\nScore: {hsp.score}, E-value: {hsp.expect}\n" for aln in blast_records.alignments for
+                hsp in aln.hsps]
+        resultado_text.delete(1.0, tk.END)
+        resultado_text.insert(tk.END, "\n".join(hits) if hits else "No similar sequence found.")
+    except Exception as e:
+        resultado_text.delete(1.0, tk.END)
+        resultado_text.insert(tk.END, f"Error running BLAST: {e}")
+
+
+# --- Montagem da Interface Gráfica (GUI) ---
 root = tk.Tk()
-root.config(bg="#302f2f")
-root.title("Consensus Sequence Assembler - Samanthex")
+root.config(bg=cor1)
+root.title("Sanger Consensus Assembler - Samanthex v2.0")
 root.geometry("1280x720")
+root.minsize(800, 600)
 
-# Automatic resizing
-root.grid_columnconfigure(0, weight=1)
-root.grid_rowconfigure(0, weight=1)
+main_frame = tk.Frame(root, bg=cor1)
+main_frame.pack(fill="both", expand=True, padx=10, pady=10)
+main_frame.grid_columnconfigure(1, weight=1)
 
-# Left panel
-frame_esquerda = tk.Frame(root, width=520, height=1080, bg=cor1)
-frame_esquerda.pack(side="left", fill="both", expand=True)
-frame_esquerda.pack_propagate(False)
+# Widgets
+font_label = ("Calibri", 14)
+font_btn = ("Calibri", 12)
+font_text = ("Courier New", 10)
 
-# Right panel (logo and controls)
-frame_direita = tk.Frame(root, width=1400, height=1080, bg=cor1)
-frame_direita.pack(side="right", fill="both", expand=True)
-frame_direita.pack_propagate(False)
+selecionar_fwd_btn = tk.Button(main_frame, text="Select Forward sequences", command=selecionar_arquivos_forward,
+                               font=font_btn, bg=cor2, fg="white", activebackground=cor1)
+selecionar_fwd_btn.grid(row=0, column=0, padx=5, pady=5, sticky="ew")
+arquivos_label_fwd = tk.Label(main_frame, text="No forward files selected", font=font_label, bg=cor1,
+                              fg="white")
+arquivos_label_fwd.grid(row=0, column=1, padx=5, pady=5, sticky="w")
 
+selecionar_rev_btn = tk.Button(main_frame, text="Select Reverse sequences", command=selecionar_arquivos_reverse,
+                               font=font_btn, bg=cor2, fg="white", activebackground=cor1)
+selecionar_rev_btn.grid(row=1, column=0, padx=5, pady=5, sticky="ew")
+arquivos_label_rev = tk.Label(main_frame, text="No reverse files selected", font=font_label, bg=cor1,
+                              fg="white")
+arquivos_label_rev.grid(row=1, column=1, padx=5, pady=5, sticky="w")
 
-# Configure grid in right panel
-frame_direita.grid_columnconfigure(1, weight=1)
+tk.Label(main_frame, text="Final name:", font=font_label, bg=cor1, fg="white").grid(row=2, column=0, padx=5, pady=5,
+                                                                                    sticky="w")
+nome_sequencia = tk.Entry(main_frame, font=font_label, bg=cor2, fg="white", insertbackground="white", width=40)
+nome_sequencia.grid(row=2, column=1, padx=5, pady=5, sticky="w")
 
-# Button to select forward sequences
-selecionar_fwd_btn = tk.Button(frame_direita, text="Select Forward Sequences", command=selecionar_arquivos_forward,
-                               font=("Calibri 15"), bg=cor1, fg="white")
-selecionar_fwd_btn.grid(row=0, column=0, padx=10, pady=10, sticky="w")
-
-# Label for selected forward sequences
-arquivos_label_fwd = tk.Label(frame_direita, text="No forward file selected", font=("Calibri 15"), bg=cor1, fg="white")
-arquivos_label_fwd.grid(row=0, column=1, padx=10, pady=10, sticky="w")
-
-# Button to select reverse sequences
-selecionar_rev_btn = tk.Button(frame_direita, text="Select Reverse Sequences", command=selecionar_arquivos_reverse,
-                               font=("Calibri 15"), bg=cor1, fg="white")
-selecionar_rev_btn.grid(row=1, column=0, padx=10, pady=10, sticky="w")
-
-# Label for selected reverse sequences
-arquivos_label_rev = tk.Label(frame_direita, text="No reverse file selected", font=("Calibri 15"), bg=cor1, fg="white")
-arquivos_label_rev.grid(row=1, column=1, padx=10, pady=10, sticky="w")
-
-# Input for final sequence name
-tk.Label(frame_direita, text="Name of the final sequence:", font=("Calibri 15"), bg=cor1, fg="white").grid(row=2, column=0, padx=10, pady=10, sticky="w")
-nome_sequencia = tk.Entry(frame_direita, width=50, font=("Calibri 15"), bg=cor1, fg="white")
-nome_sequencia.grid(row=2, column=1, padx=10, pady=10, sticky="w")
-
-# Dropdown to select minimum Phred value
-tk.Label(frame_direita, text="Minimum value of Phred:", font=("Calibri 15"), bg=cor1, fg="white").grid(row=3, column=0, padx=10, pady=10, sticky="w")
+tk.Label(main_frame, text="Minimum Phred:", font=font_label, bg=cor1, fg="white").grid(row=3, column=0, padx=5, pady=5,
+                                                                                      sticky="w")
 phred_minimo = StringVar(root)
-phred_minimo.set("15")
+phred_minimo.set("20")
 opcoes_phred = ["10", "15", "20", "25", "30", "35", "40"]
-phred_menu = OptionMenu(frame_direita, phred_minimo, *opcoes_phred)
-phred_menu.config(bg=cor1, fg="white", font=("Calibri 15"))
-phred_menu.grid(row=3, column=1, padx=10, pady=10, sticky="w")
+phred_menu = OptionMenu(main_frame, phred_minimo, *opcoes_phred)
+phred_menu.config(bg=cor2, fg="white", font=font_btn, activebackground=cor1, highlightthickness=0)
+phred_menu["menu"].config(bg=cor2, fg="white")
+phred_menu.grid(row=3, column=1, padx=5, pady=5, sticky="w")
 
-# Button to start consensus assembly
-iniciar_btn = tk.Button(frame_direita, text="Start", command=iniciar_processamento, font=("Calibri 15"), bg=cor1, fg="white")
-iniciar_btn.grid(row=4, column=0, padx=10, pady=10, sticky="w")
+btn_frame = tk.Frame(main_frame, bg=cor1)
+btn_frame.grid(row=4, column=0, columnspan=2, pady=10, sticky="w")
+iniciar_btn = tk.Button(btn_frame, text="Generate Final Consensus", command=iniciar_processamento, font=font_btn,
+                        bg="green", fg="white")
+iniciar_btn.pack(side="left", padx=5)
+blast_btn = tk.Button(btn_frame, text="BLAST", command=executar_blast, state=tk.DISABLED, font=font_btn, bg="blue",
+                      fg="white")
+blast_btn.pack(side="left", padx=5)
 
-# Button to run BLAST (disabled initially)
-blast_btn = tk.Button(frame_direita, text="BLAST", command=executar_blast, state=tk.DISABLED, font=("Calibri 15"), bg=cor1, fg="white")
-blast_btn.grid(row=4, column=1, padx=10, pady=10, sticky="w")
-
-# Text area for displaying BLAST results
-resultado_text = tk.Text(frame_direita, height=20, width=100, font=("Calibri 10"), bg=cor1, fg="white")
-resultado_text.grid(row=5, column=0, columnspan=2, padx=10, pady=10)
+resultado_text = tk.Text(main_frame, height=15, font=font_text, bg="#1e1e1e", fg="lightgreen", insertbackground="white",
+                         wrap="word")
+resultado_text.grid(row=5, column=0, columnspan=2, padx=5, pady=5, sticky="nsew")
+main_frame.grid_rowconfigure(5, weight=1)
 
 root.mainloop()
