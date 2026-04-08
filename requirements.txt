@@ -1,4 +1,2 @@
-tkinter
-biopython
-os
-socket
+biopython>=1.80
+numpy>=1.21
