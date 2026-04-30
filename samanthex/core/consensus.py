@@ -41,8 +41,8 @@ class ConsensusResult:
         statistics: Quality and composition statistics.
         warnings: Any warnings generated during assembly.
     """
-    sequence: str
-    quality: List[int]
+    sequence: str = ""
+    quality: List[int] = field(default_factory=list)
     name: str = "consensus"
     fwd_reads: int = 0
     rev_reads: int = 0

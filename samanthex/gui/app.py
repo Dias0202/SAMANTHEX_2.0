@@ -494,8 +494,9 @@ class SamanthexApp(tk.Tk):
             self.after(0, self._show_results, result)
 
         except Exception as e:
+            msg = str(e)
             self.after(
-                0, lambda: messagebox.showerror("Assembly Error", str(e))
+                0, lambda: messagebox.showerror("Assembly Error", msg)
             )
         finally:
             self.after(0, self._set_processing, False)
@@ -518,12 +519,14 @@ class SamanthexApp(tk.Tk):
             self.after(0, self._show_blast_results, formatted)
 
         except ConnectionError as e:
+            msg = str(e)
             self.after(
-                0, lambda: messagebox.showerror("Connection Error", str(e))
+                0, lambda: messagebox.showerror("Connection Error", msg)
             )
         except Exception as e:
+            msg = str(e)
             self.after(
-                0, lambda: messagebox.showerror("BLAST Error", str(e))
+                0, lambda: messagebox.showerror("BLAST Error", msg)
             )
         finally:
             self.after(0, self._set_processing, False)
