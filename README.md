@@ -73,7 +73,7 @@ Low-quality ends are trimmed using Mott's modified algorithm, which finds the co
 
 ### Option A: Standalone Executable (Recommended for End Users)
 
-Download `Samanthex.exe` from the releases — **no installation required**. Just double-click to run.
+Download `Samanthex.exe` from the [Releases page](https://github.com/Dias0202/SAMANTHEX_2.0/releases/latest) — **no installation required**. Just double-click to run. The executable is not stored in the Git repository; it is built with `build_exe.py` and attached to each release.
 
 ### Option B: From Source
 

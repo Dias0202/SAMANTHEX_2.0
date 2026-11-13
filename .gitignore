@@ -1,0 +1,11 @@
+# PyInstaller output: the executable is published as a GitHub Release asset
+build/
+dist/
+*.spec
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
