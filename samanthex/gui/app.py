@@ -598,15 +598,23 @@ class SamanthexApp(tk.Tk):
         except Exception as e:
             self._update_status(f"Assembly complete! (Could not auto-save: {e})")
 
-        messagebox.showinfo(
-            "Assembly Complete",
+        # Low-alignment merges are not blocked, but the user must see them.
+        notify = messagebox.showwarning if result.warnings else messagebox.showinfo
+        warning_note = (
+            f"\n\n{len(result.warnings)} warning(s) - review them in the "
+            f"Consensus tab before using this sequence."
+            if result.warnings else ""
+        )
+        notify(
+            "Assembly Complete" + (" - with warnings" if result.warnings else ""),
             f"Consensus: {result.statistics.get('length', 0)} bp\n"
             f"Mean Quality: {result.statistics.get('mean_quality', 0):.1f}\n"
             f"Bases >= Q20: {result.statistics.get('q20_percent', 0):.1f}%\n"
             f"N bases: {result.statistics.get('n_count', 0)} "
             f"({result.statistics.get('n_percent', 0):.1f}%)\n"
             f"GC content: {result.statistics.get('gc_content', 0):.1f}%\n"
-            f"Forward reads: {result.fwd_reads} | Reverse reads: {result.rev_reads}",
+            f"Forward reads: {result.fwd_reads} | Reverse reads: {result.rev_reads}"
+            f"{warning_note}",
         )
 
     def _show_blast_results(self, formatted: str):

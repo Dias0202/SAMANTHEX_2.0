@@ -61,6 +61,10 @@ During sequence merging, SAMANTHEX uses Phred quality scores to resolve conflict
 - **Gaps** → The non-gap base is used with its original quality.
 - **Final filter** → Only applied at the last step. Bases below the Phred threshold are replaced with `N`.
 
+### Low-Overlap Warning
+
+Every merge is checked against a minimum local-alignment score (20% of the best possible score for the shorter read). When a merge falls below it — or no alignment is found — the consensus is still produced, but the assembly finishes with a warning dialog and the warning is listed in the Consensus tab and in the quality report. Such a consensus may join reads that do not overlap and must be reviewed before use.
+
 ### Mott's Trimming Algorithm
 
 Low-quality ends are trimmed using Mott's modified algorithm, which finds the contiguous region maximizing `Σ(Qi - threshold)`. This is the same approach used by phred/phrap and is equivalent to Kadane's maximum subarray algorithm.

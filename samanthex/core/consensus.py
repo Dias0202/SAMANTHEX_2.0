@@ -116,11 +116,23 @@ def _create_aligner() -> PairwiseAligner:
     return aligner
 
 
+LOW_SCORE_FRACTION = 0.2
+"""Minimum alignment score, as a fraction of the best possible score for
+the shorter read (``min_len * match_score``), below which a merge is flagged."""
+
+
+def is_low_alignment_score(score: float, min_len: int, match_score: float) -> bool:
+    """Return True when an alignment score is too low to trust the overlap."""
+    return score < min_len * match_score * LOW_SCORE_FRACTION
+
+
 def merge_two_sequences(
     seq1: str,
     qual1: List[int],
     seq2: str,
     qual2: List[int],
+    warnings: Optional[List[str]] = None,
+    label: str = "",
 ) -> Tuple[str, List[int]]:
     """Merge two sequences using quality-weighted consensus.
 
@@ -137,6 +149,11 @@ def merge_two_sequences(
         qual1: Phred quality scores for seq1.
         seq2: Second DNA sequence.
         qual2: Phred quality scores for seq2.
+        warnings: Optional list that receives a user-facing message when
+            the alignment is missing or its score is below the overlap
+            threshold. The merge still proceeds, but the consensus in that
+            case may join reads that do not overlap and must be reviewed.
+        label: Short description of the merge, used in the warning text.
 
     Returns:
         Tuple of (consensus_sequence, consensus_quality).
@@ -153,6 +170,11 @@ def merge_two_sequences(
         best = alignments[0]
     except (IndexError, StopIteration, OverflowError, ValueError):
         logger.warning("No alignment found, returning first sequence")
+        if warnings is not None:
+            warnings.append(
+                f"{label or 'Merge'}: no alignment found between the reads; "
+                f"only the first sequence was kept. Review the consensus."
+            )
         return seq1, qual1
 
     coords = best.coordinates
@@ -160,12 +182,18 @@ def merge_two_sequences(
 
     # Validate alignment quality
     min_len = min(len(seq1), len(seq2))
-    min_score = min_len * aligner.match_score * 0.2
-    if score < min_score:
+    min_score = min_len * aligner.match_score * LOW_SCORE_FRACTION
+    if is_low_alignment_score(score, min_len, aligner.match_score):
         logger.warning(
             f"Low alignment score ({score:.0f} < {min_score:.0f}). "
             f"Sequences may not overlap well."
         )
+        if warnings is not None:
+            warnings.append(
+                f"{label or 'Merge'}: LOW ALIGNMENT SCORE ({score:.0f} < "
+                f"{min_score:.0f}). The reads may not overlap; the consensus "
+                f"was still built and must be reviewed before use."
+            )
 
     # Get alignment boundaries
     s1_start = int(coords[0, 0])
@@ -270,6 +298,8 @@ def merge_two_sequences(
 def build_replicate_consensus(
     reads: List[Tuple[str, List[int]]],
     on_status: StatusCallback = None,
+    warnings: Optional[List[str]] = None,
+    direction: str = "",
 ) -> Tuple[str, List[int]]:
     """Build consensus from multiple replicates of the same direction.
 
@@ -280,6 +310,8 @@ def build_replicate_consensus(
     Args:
         reads: List of (sequence, quality) tuples from replicates.
         on_status: Optional callback for progress updates.
+        warnings: Optional list that receives low-alignment warnings.
+        direction: Read direction, used in the warning text.
 
     Returns:
         Tuple of (consensus_sequence, consensus_quality).
@@ -300,6 +332,8 @@ def build_replicate_consensus(
         consensus_seq, consensus_qual = merge_two_sequences(
             consensus_seq, consensus_qual,
             reads[i][0], reads[i][1],
+            warnings=warnings,
+            label=f"{direction.capitalize() or 'Replicate'} replicate {i + 1}",
         )
 
     return consensus_seq, consensus_qual
@@ -484,6 +518,8 @@ def assemble_consensus(
         fwd_consensus, fwd_qual = build_replicate_consensus(
             fwd_reads,
             on_status=lambda msg, pct: _progress(msg, pct * 0.1) if on_status else None,
+            warnings=warnings,
+            direction="forward",
         )
     else:
         fwd_consensus, fwd_qual = "", []
@@ -496,6 +532,8 @@ def assemble_consensus(
         rev_consensus, rev_qual = build_replicate_consensus(
             rev_reads,
             on_status=lambda msg, pct: _progress(msg, pct * 0.1) if on_status else None,
+            warnings=warnings,
+            direction="reverse",
         )
     else:
         rev_consensus, rev_qual = "", []
@@ -508,6 +546,8 @@ def assemble_consensus(
         final_seq, final_qual = merge_two_sequences(
             fwd_consensus, fwd_qual,
             rev_consensus, rev_qual,
+            warnings=warnings,
+            label="Forward/reverse merge",
         )
     elif has_fwd:
         final_seq, final_qual = fwd_consensus, fwd_qual
